@@ -1,0 +1,13 @@
+.env
+.venv/
+data/uploads/*
+!data/uploads/.gitkeep
+bot.db
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.pytest_cache/
