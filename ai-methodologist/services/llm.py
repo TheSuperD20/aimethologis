@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 import anthropic
 from prompts.longread import (
-    INTENT_PROMPT, LONGREAD_SYSTEM_PROMPT, LONGREAD_USER_PROMPT, EDIT_PROMPT
+    INTENT_PROMPT, LONGREAD_SYSTEM_PROMPT, LONGREAD_USER_PROMPT, EDIT_PROMPT, STRUCTURE_PROMPT
 )
 from prompts.test import QUIZ_PROMPT, CASE_PROMPT, OPEN_QUESTIONS_PROMPT, TEST_EDIT_PROMPT
 
@@ -68,10 +68,23 @@ class LLMService:
             logger.warning(f"Intent parsing failed: {e}")
             return {"intent": "unknown", "entities": {}}
 
-    def generate_longread(self, topic: str, source_text: str) -> str:
+    def generate_structure(self, topic: str, source_text: str, interview_answers: str) -> str:
+        return self._call_with_retry(
+            system="Ты методолог, который предлагает структуру обучающего курса. Отвечай по-русски.",
+            user=STRUCTURE_PROMPT.format(
+                topic=topic,
+                interview_answers=interview_answers or "Не указано",
+                source_text=source_text[:6000],
+            ),
+            max_tokens=1000,
+        )
+
+    def generate_longread(self, topic: str, source_text: str, structure: str = "", interview_answers: str = "") -> str:
+        structure_hint = f"\n\nСтруктура курса (согласована с экспертом):\n{structure}" if structure else ""
+        interview_hint = f"\n\nКонтекст из интервью:\n{interview_answers}" if interview_answers else ""
         return self._call_with_retry(
             system=LONGREAD_SYSTEM_PROMPT,
-            user=LONGREAD_USER_PROMPT.format(topic=topic, source_text=source_text),
+            user=LONGREAD_USER_PROMPT.format(topic=topic, source_text=source_text) + structure_hint + interview_hint,
             max_tokens=8000,
         )
 

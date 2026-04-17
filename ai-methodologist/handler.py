@@ -40,8 +40,12 @@ class Handler:
 
         status = task["status"]
 
-        if status == "WAITING_MATERIALS":
+        if status == "INTERVIEW":
+            self._handle_interview_answers(task, message)
+        elif status == "WAITING_MATERIALS":
             self._handle_materials(task, message, file_ids)
+        elif status == "STRUCTURE_PROPOSAL" and not file_ids:
+            self._handle_structure_feedback(task, message)
         elif status == "REVIEW_EXPERT" and not file_ids:
             self._handle_expert_feedback_text(task, message)
         elif status == "REVIEW_TEST" and not file_ids:
@@ -62,8 +66,8 @@ class Handler:
 
         status = task["status"]
         dispatch = {
-            ("CHECKING_DUPLICATES", "confirm_continue"): self._on_continue_after_check,
-            ("CHECKING_DUPLICATES", "cancel"): self._on_cancel,
+            ("STRUCTURE_PROPOSAL", "confirm_structure"): self._on_confirm_structure,
+            ("STRUCTURE_PROPOSAL", "edit_structure"): self._on_edit_structure,
             ("REVIEW_EXPERT", "approve"): self._on_expert_approve_longread,
             ("REVIEW_EXPERT", "request_changes"): self._on_expert_request_longread_changes,
             ("ASK_TEST", "quiz"): lambda t: self._on_test_type_chosen(t, "quiz"),
@@ -92,14 +96,26 @@ class Handler:
     # ---- New conversation ----
 
     def _handle_new_conversation(self, user_id: str, channel_id: str, message: str, file_ids: list):
+        greeting_words = {"привет", "hello", "hi", "добрый", "здравствуй", "хай", "хэй", "ку"}
+        msg_words = set(message.lower().split())
+        is_greeting = bool(msg_words & greeting_words) and len(msg_words) <= 4
+
+        if is_greeting:
+            self.bot.send_message(
+                channel_id,
+                "Привет! Я методолог и помогу тебе создать обучающий курс и загрузить его на платформу Campus.\n\n"
+                "Расскажи подробнее, какая у тебя идея курса и что ты планируешь сделать?",
+            )
+            return
+
         intent_data = self.llm.parse_intent(message)
         intent = intent_data.get("intent")
 
         if intent != "create_course":
             self.bot.send_message(
                 channel_id,
-                "Привет! 👋 Я помогаю создавать обучающие курсы.\n\n"
-                "Напиши мне что-то вроде: «Хочу сделать курс по теме X» — и мы начнём!",
+                "Привет! Я методолог и помогу тебе создать обучающий курс и загрузить его на платформу Campus.\n\n"
+                "Расскажи подробнее, какая у тебя идея курса и что ты планируешь сделать?",
             )
             return
 
@@ -112,34 +128,39 @@ class Handler:
             methodologist_mm_id=self.methodologist_mm_id,
             methodologist_channel_id=meth_channel,
         )
-        self.state.update_task(task_id, status="CHECKING_DUPLICATES")
-        self.bot.send_buttons(
+        self.state.update_task(task_id, status="INTERVIEW")
+        self.bot.send_message(
             channel_id,
-            f"Хочешь создать курс по теме: **{topic}**\n\n"
-            "Я проверил базу — похожих курсов не найдено. Продолжаем?",
-            [
-                {"name": "✅ Продолжить", "context": {"task_id": task_id, "action": "confirm_continue"}},
-                {"name": "❌ Отменить", "context": {"task_id": task_id, "action": "cancel"}},
-            ],
+            "Класс, давай уточним детали, чтобы собрать сильный курс 👇\n\n"
+            "🎯 *Цели курса*\n"
+            "• Какая основная цель курса?\n"
+            "• Как планируешь оценивать результат?\n"
+            "  (например: тест, кейсы, практика, внедрение в работу, метрики)\n\n"
+            "👥 *Целевая аудитория*\n"
+            "• Кто будет проходить этот курс?\n"
+            "• Какой у них уровень знаний по теме?\n\n"
+            "🧩 *Содержание курса*\n"
+            "• Какие блоки или темы обязательно должны быть в курсе?\n"
+            "• Есть ли уже структура или нужно помочь её собрать?",
         )
 
     # ---- State handlers ----
 
-    def _on_continue_after_check(self, task: dict):
-        self.state.update_task(task["id"], status="WAITING_MATERIALS")
+    def _handle_interview_answers(self, task: dict, message: str):
+        if not message.strip():
+            return
+        self.state.update_task(task["id"], interview_answers=message, status="WAITING_MATERIALS")
         self.bot.send_message(
             task["expert_channel_id"],
-            "Отлично! Теперь загрузи материалы для курса.\n\n"
-            "Принимаю:\n"
-            "📄 Документы: Word (.docx), PDF, текстовый файл (.txt)\n"
-            "📊 Презентации: PowerPoint (.pptx)\n"
-            "🎥 Видео: пока загрузи текстовое описание (транскрибация — скоро)\n\n"
-            "Можно загрузить несколько файлов сразу.",
+            "Отлично, теперь давай соберём материалы для курса.\n\n"
+            "Загрузи всё, что у тебя есть — это могут быть:\n"
+            "– презентации\n"
+            "– PDF-документы\n"
+            "– текстовые файлы\n"
+            "– записи встреч или вебинаров\n"
+            "– любые другие материалы\n\n"
+            "Если материалов несколько — загружай всё, я обработаю.",
         )
-
-    def _on_cancel(self, task: dict):
-        self.state.update_task(task["id"], status="CANCELLED")
-        self.bot.send_message(task["expert_channel_id"], "Хорошо, отменяю. Если понадоблюсь — пиши! 👋")
 
     def _handle_materials(self, task: dict, message: str, file_ids: list):
         if not file_ids and not message.strip():
@@ -199,15 +220,58 @@ class Handler:
 
         try:
             with self.bot.typing_while(task["expert_channel_id"]):
-                longread = self.llm.generate_longread(task["topic"], source_text)
+                structure = self.llm.generate_structure(
+                    task["topic"],
+                    source_text,
+                    task.get("interview_answers") or "",
+                )
         except LLMError:
             self.state.update_task(task["id"], status="WAITING_MATERIALS")
             self.bot.send_message(
                 task["expert_channel_id"],
-                "❌ Ошибка при генерации материала. Попробуй загрузить файлы ещё раз.",
+                "❌ Ошибка при анализе материалов. Попробуй загрузить файлы ещё раз.",
             )
             return
 
+        self.state.update_task(task["id"], status="STRUCTURE_PROPOSAL", proposed_structure=structure)
+        self._send_structure_proposal(task["id"], task["expert_channel_id"], structure)
+
+    def _send_structure_proposal(self, task_id: str, channel_id: str, structure: str):
+        self.bot.send_message(
+            channel_id,
+            f"Я посмотрела материалы и предлагаю такую структуру курса 👇\n\n{structure}\n\n"
+            "Посмотри, пожалуйста, подходит ли такая структура?\n"
+            "Хочешь что-то добавить, убрать или поменять?",
+        )
+        self.bot.send_buttons(
+            channel_id,
+            "Твоё решение:",
+            [
+                {"name": "✅ Подходит", "context": {"task_id": task_id, "action": "confirm_structure"}},
+                {"name": "✏️ Хочу изменить", "context": {"task_id": task_id, "action": "edit_structure"}},
+            ],
+        )
+
+    def _on_confirm_structure(self, task: dict):
+        self.bot.send_message(
+            task["expert_channel_id"],
+            "⏳ Отлично! Генерирую полный курс на основе структуры — это займёт несколько минут...",
+        )
+        task = self.state.get_task(task["id"])
+        try:
+            with self.bot.typing_while(task["expert_channel_id"]):
+                longread = self.llm.generate_longread(
+                    task["topic"],
+                    task["source_text"],
+                    structure=task.get("proposed_structure") or "",
+                    interview_answers=task.get("interview_answers") or "",
+                )
+        except LLMError:
+            self.bot.send_message(
+                task["expert_channel_id"],
+                "❌ Ошибка при генерации курса. Попробуй ещё раз — нажми «Подходит».",
+            )
+            return
         self.state.update_task(
             task["id"],
             status="REVIEW_EXPERT",
@@ -215,7 +279,32 @@ class Handler:
             longread_version=1,
             longread_edit_count=0,
         )
+        self.bot.send_message(task["expert_channel_id"], "Готово! Вот структура и содержание курса 👇")
         self._send_longread_for_review(task["id"], task["expert_channel_id"], longread, version=1)
+
+    def _on_edit_structure(self, task: dict):
+        self.bot.send_message(
+            task["expert_channel_id"],
+            "Напиши, что хочешь изменить в структуре — я обновлю.",
+        )
+
+    def _handle_structure_feedback(self, task: dict, message: str):
+        if not message.strip():
+            return
+        task = self.state.get_task(task["id"])
+        if task["status"] != "STRUCTURE_PROPOSAL":
+            return
+        self.bot.send_message(task["expert_channel_id"], "⏳ Обновляю структуру...")
+        try:
+            with self.bot.typing_while(task["expert_channel_id"]):
+                current = task.get("proposed_structure") or ""
+                updated_structure = self.llm.apply_edits(current, message)
+        except LLMError:
+            self.bot.send_message(task["expert_channel_id"],
+                "❌ Ошибка при обновлении структуры. Попробуй ещё раз.")
+            return
+        self.state.update_task(task["id"], proposed_structure=updated_structure)
+        self._send_structure_proposal(task["id"], task["expert_channel_id"], updated_structure)
 
     def _send_longread_for_review(self, task_id: str, channel_id: str, longread: str, version: int):
         tmp = f"{UPLOAD_DIR}/{task_id}_longread_v{version}.md"

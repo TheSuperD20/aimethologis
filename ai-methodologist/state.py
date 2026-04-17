@@ -26,6 +26,8 @@ class StateManager:
                     expert_channel_id TEXT,
                     methodologist_mm_id TEXT,
                     methodologist_channel_id TEXT,
+                    interview_answers TEXT,
+                    proposed_structure TEXT,
                     source_text TEXT,
                     longread TEXT,
                     longread_version INTEGER DEFAULT 0,
@@ -39,6 +41,11 @@ class StateManager:
                     updated_at TEXT
                 )
             """)
+            for col in ["interview_answers", "proposed_structure"]:
+                try:
+                    conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} TEXT")
+                except Exception:
+                    pass
 
     def create_task(
         self,
