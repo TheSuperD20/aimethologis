@@ -9,8 +9,8 @@ from prompts.longread import (
 from prompts.test import QUIZ_PROMPT, CASE_PROMPT, OPEN_QUESTIONS_PROMPT, TEST_EDIT_PROMPT
 
 logger = logging.getLogger(__name__)
-MODEL = "claude-sonnet-4-20250514"
-LLM_TIMEOUT = 90  # seconds
+MODEL = "claude-sonnet-4-6"
+LLM_TIMEOUT = 180  # seconds
 
 
 class LLMError(Exception):
